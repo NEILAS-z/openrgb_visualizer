@@ -1,4 +1,6 @@
 # openrgb_visualizer
 a real time FFT visualizer in python which outputs specific hz's and changes colors of your devices using openrgb
 
-update this code to work with your setup. you could have a light strip or you dont have colors on your fans.
+I would recommend the *Visual Map* plugin in OpenRGB for this. as the code detects virtual devices.
+
+you can change the code to detect a keyboard or a light strip for example.
