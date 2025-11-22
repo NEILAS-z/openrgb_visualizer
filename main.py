@@ -1,44 +1,60 @@
 import openrgb
-from keys import Key
+import time
 import numpy as np
 import soundcard as sc
-import colorsys
 from device import DeviceWrapper
-from openrgb.utils import RGBColor
+import colorsys
 
-client = openrgb.OpenRGBClient()
+totalRretries = 5
+retryDelay = 5  # seconds
 
-keyboard = DeviceWrapper(client.get_devices_by_type(openrgb.utils.DeviceType.KEYBOARD)[0])
-fans = DeviceWrapper(client.get_devices_by_type(openrgb.utils.DeviceType.MOTHERBOARD)[0])
+currentRetry = 0
 
-#rint(keyboard.data.leds)
+client = None
 
+# Retry logic for connecting to OpenRGB server
+while currentRetry < totalRretries:
+    try:
+        client = openrgb.OpenRGBClient(name="testController")
+        break  # Successfully connected, exit the loop
+    except TimeoutError:
+        currentRetry += 1
+        if currentRetry < totalRretries:
+            print(f"Connection failed. Retrying in {retryDelay} seconds... ({currentRetry}/{totalRretries})")
+            time.sleep(retryDelay)
+        else:
+            print("Failed to connect after multiple attempts.")
+            raise
+
+# get speaker device
 loopback = sc.get_microphone(
     id=sc.default_speaker().id,
     include_loopback=True
 )
 
+totalTime = 0.0
+
 window = np.hanning(1024)
 
-keys = [
-    [Key.BACKSLASH, Key.A, Key.Q],
-    [Key.Z, Key.S, Key.W],
-    [Key.X, Key.D, Key.E],
-    [Key.C, Key.F, Key.R],
-    [Key.V, Key.G, Key.T],
-    [Key.B, Key.H, Key.Y],
-    [Key.N, Key.J, Key.U],
-    [Key.M, Key.K, Key.I],
-    [Key.COMMA, Key.L, Key.O],
-    [Key.DOT, Key.SEMICOLON, Key.P],
-    [Key.SLASH, Key.SINGLE_QUOTE, Key.LEFT_BRACKET]
-]
+main = DeviceWrapper(client.get_devices_by_type(openrgb.utils.DeviceType.VIRTUAL)[0])
 
+main_zone = main.device.zones[0]
 
-hz_list = [20*(1100**(i/len(keys))) for i in range(len(keys))]
-hz_list2 = [20*(1100**(i/8)) for i in range(8)]
+matrix = main_zone.matrix_map
 
-time = 0
+width = main_zone.mat_width
+height = main_zone.mat_height
+
+hz_list = [20*(1100**(i/width)) for i in range(width)]
+
+def set_key(x, y, color):
+    try:
+        led_index = matrix[y][x]
+    except IndexError:
+        return
+    if led_index == None:
+        return
+    main.set(led_index, color)
 
 with loopback.recorder(samplerate=44100, blocksize=1024) as sp:
     while True:
@@ -51,13 +67,13 @@ with loopback.recorder(samplerate=44100, blocksize=1024) as sp:
         mags = np.abs(fft_data[:len(fft_data)//2])
         peak_freq = freqs[:len(freqs)//2][np.argmax(mags)]
 
-
-        time += np.max(mags) / 25
+        totalTime += np.max(mags) / 25
 
         try:
             last_mags
         except NameError:
             last_mags = np.zeros_like(mags)
+
         
 
         # alpha = how fast to follow new data (0 = super smooth, 1 = jump instantly)
@@ -66,34 +82,34 @@ with loopback.recorder(samplerate=44100, blocksize=1024) as sp:
         # linear interpolation
         last_mags = last_mags + alpha * (mags - last_mags)
         
-        def GetFreqMagnitude(freq):
-            index = round(freq / (44100 / 1024))
-            if np.max(mags) == 0:
-                return 0 # avoid / 0 errors
-            return last_mags[index] / 50
-        
-        for i, hz in enumerate(hz_list):
-            key_list = keys[i]
-            mag = GetFreqMagnitude(hz)
-            r, g, b = colorsys.hsv_to_rgb(((time + mag*40)%360) / 360, 1, 1)
+        def GetFreqMagnitude(freq, bandwidth=0.5):
+            bin_width = 44100 / 1024  # ~43.07 Hz per bin
+            center_bin = freq / bin_width
+            start = int(center_bin - bandwidth * 3)
+            end = int(center_bin + bandwidth * 3) + 1
+            
+            total = 0.0
+            weight_sum = 0.0
+            
+            for i in range(max(0, start), min(len(last_mags), end)):
+                distance = abs(i - center_bin)
+                weight = np.exp(-(distance ** 2) / (2 * bandwidth ** 2))  # Gaussian
+                total += last_mags[i] * weight
+                weight_sum += weight
+            
+            if weight_sum == 0:
+                return 0
+            return (total / weight_sum) / 15  # normalized + scaled
 
-            # really manual way but if it aint broke dont fix it
-            key1 = min(mag * (255 * 3), 255)
-            key2 = min(max(0, (mag * (255 * 3)) - 255), 255)
-            key3 = min(max(0, (mag * (255 * 3)) - (255*2)), 255)
-
-            keyboard.set(key_list[0], RGBColor(int(key1 * r), int(key1 * g), int(key1 * b)))
-            keyboard.set(key_list[1], RGBColor(int(key2 * r), int(key2 * g), int(key2 * b)))
-            keyboard.set(key_list[2], RGBColor(int(key3 * r), int(key3 * g), int(key3 * b)))
-        for i, hz in enumerate(hz_list2):
-            mag = GetFreqMagnitude(hz)
-
-            color = min(max(0, mag * 255), 255)
-
-            r, g, b = colorsys.hsv_to_rgb(((time + mag*40)%360) / 360, 1, 1)
-
-            fans.set(i + 10, RGBColor(int(color * r), int(color * g), int(color * b)))
-        
-        #keyboard.set_color(RGBColor(int(GetFreqMagnitude(30) * 255), 0, 0), fast=True)
-        keyboard.render(fast=True)
-        fans.render(fast=True)
+        for x in range(width):
+            mag = GetFreqMagnitude(hz_list[x]) / 1.2
+            rainbow = colorsys.hsv_to_rgb((totalTime % 360 / 360) + (mag / 10), 1, 1)
+            for y in range(height):
+                flipped_y = height - 1 - y
+                # if the height was 2 and mag was 0.7.
+                # then y=0 would be fully on and y=1 would be on by 20%
+                # so y[0] = 0.7 * (255 * 2) - (0 * 255) = 255 (capped)
+                # and y[1] = 0.7 * (255 * 2) - (1 * 255) = 102 (rounded)
+                level = int(min(max(0, mag * (255 * height) - (y * 255)), 255))
+                set_key(x, flipped_y, (int(rainbow[0] * level), int(rainbow[1] * level), int(rainbow[2] * level)))
+        main.render(clear_buffer=True, fast=True)
