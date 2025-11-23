@@ -1,5 +1,4 @@
 from openrgb.utils import RGBColor
-from keys import Key
 
 class DeviceWrapper:
     def __init__(self, rgb_device):
@@ -11,8 +10,6 @@ class DeviceWrapper:
             self._colors = [RGBColor(0, 0, 0) for led in range(24)]
 
     def set(self, key, color):
-        if isinstance(key, Key):
-            key = key.value
         if isinstance(color, tuple):
             color = RGBColor(*color)
         # just set directly in the list
@@ -24,3 +21,4 @@ class DeviceWrapper:
         self.device.set_colors(self._colors, fast=fast)
         if clear_buffer:
             self._colors = [RGBColor(0, 0, 0) for _ in self._colors]
+
