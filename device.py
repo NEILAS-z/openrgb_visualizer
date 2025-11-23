@@ -19,6 +19,8 @@ class DeviceWrapper:
         if 0 <= key < len(self._colors):
             self._colors[key] = color
 
-    def render(self, fast=False):
+    def render(self, fast=False, clear_buffer=True):
         # push the entire buffer at once
         self.device.set_colors(self._colors, fast=fast)
+        if clear_buffer:
+            self._colors = [RGBColor(0, 0, 0) for _ in self._colors]
